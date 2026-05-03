@@ -70,19 +70,29 @@ impl Block {
         }
         None
     }
+
+    pub fn expend(&mut self, map: &Map) {
+
+    }
+}
+
+enum Cell {
+    Wall,
+    Block(usize),
+    Empty
 }
 
 pub struct Map {
     pub width: usize,
     pub height: usize,
-    wall: Vec<bool>,
-    pub block_map: Vec<Option<usize>>,
+    pub block_map: Vec<Cell>,
     pub blocks: Vec<Block>,
 }
 
 impl Map {
     pub fn new(width: usize, height: usize, wall: Vec<bool>) -> Self {
         let block_map = vec![None; width * height];
+        for w in
         let blocks = vec![];
         let mut map = Map {
             width,
