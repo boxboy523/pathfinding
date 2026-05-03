@@ -17,6 +17,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             rust
+            rust-analyzer
             pkg-config
             libGL
             libxkbcommon

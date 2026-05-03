@@ -24,6 +24,16 @@ async fn main() {
     .collect::<Vec<bool>>();
 
     let map = Map::new(20, 20, wall.clone());
+    println!("intersect test: {:?}", map.get_neighbors(1));
+    // for i in 0..1000 {
+    //     let new_map = Map::new(20, 20, wall.clone());
+    //     if new_map.blocks.len() < map.blocks.len() {
+    //         map = new_map;
+    //     }
+    // }
+    let field = map
+        .build_flow_field(pathfinding::Pos { x: 3, y: 3 })
+        .unwrap();
     loop {
         clear_background(BLACK);
 
@@ -49,17 +59,17 @@ async fn main() {
 
                 draw_rectangle_lines(px, py, cell_size, cell_size, 1.0, DARKGRAY);
 
-                let dir = Vec2::new(1.0, 0.0);
+                let dir = field.flow[y * cols + x];
                 let len = cell_size / 2.0;
                 let center = Vec2::new(px + cell_size / 2.0, py + cell_size / 2.0);
-                /*draw_line(
+                draw_line(
                     center.x,
                     center.y,
-                    center.x + dir.x * len,
-                    center.y + dir.y * len,
+                    center.x + dir.0 * len,
+                    center.y + dir.1 * len,
                     2.0,
                     RED,
-                );*/
+                );
             }
         }
 
