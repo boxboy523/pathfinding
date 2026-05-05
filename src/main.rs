@@ -1,5 +1,5 @@
 use macroquad::prelude::*;
-use pathfinding::Map;
+use pathfinding::{map::Map, types::Pos};
 
 #[macroquad::main("Flow Field Debug")]
 async fn main() {
@@ -31,9 +31,7 @@ async fn main() {
     //         map = new_map;
     //     }
     // }
-    let field = map
-        .build_flow_field(pathfinding::Pos { x: 3, y: 3 })
-        .unwrap();
+    let field = map.build_flow_field(Pos { x: 3, y: 3 }).unwrap();
     loop {
         clear_background(BLACK);
 
