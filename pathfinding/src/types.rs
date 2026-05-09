@@ -138,5 +138,5 @@ impl Eq for VisitNode {}
 
 pub struct FlowField {
     pub goal: Pos,
-    pub flow: Vec<(f32, f32)>, // grid index -> flow norm vector (dx, dy)
+    pub flow: Vec<Option<(f32, f32)>>, // grid index -> flow norm vector (dx, dy)
 }

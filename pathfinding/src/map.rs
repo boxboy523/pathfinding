@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashSet};
 
 use crate::{
     block::Block,
@@ -11,8 +11,6 @@ pub struct Map {
     pub height: usize,
     block_map: Vec<Cell>,
     pub blocks: Vec<Block>,
-    line_cache: HashMap<(usize, usize), f32>,
-    norm_cache: HashMap<(usize, usize), (f32, f32)>,
 }
 
 impl Map {
@@ -29,24 +27,8 @@ impl Map {
             height,
             block_map,
             blocks,
-            line_cache: HashMap::new(),
-            norm_cache: HashMap::new(),
         };
         map.random_expand();
-        let max_distance = map.blocks.iter().fold(0, |max_dist, block| {
-            max_dist.max(block.width).max(block.height)
-        });
-        for i in 0..max_distance {
-            for j in 0..=i {
-                if i == 0 {
-                    continue;
-                }
-                let dist = ((i * i + j * j) as f32).sqrt();
-                map.line_cache.insert((j, i), dist);
-                map.norm_cache
-                    .insert((j, i), (j as f32 / dist, i as f32 / dist));
-            }
-        }
         map
     }
 
@@ -220,14 +202,11 @@ impl Map {
                 }
                 let boundary_mid = line.mid_point();
                 let entry_mid = node.entry.mid_point();
-                let mut diff = (
+                let diff = (
                     (boundary_mid.x as isize - entry_mid.x as isize).abs() as usize,
                     (boundary_mid.y as isize - entry_mid.y as isize).abs() as usize,
                 );
-                if diff.0 > diff.1 {
-                    diff = (diff.1, diff.0);
-                }
-                let dist = self.line_cache[&diff];
+                let dist = ((diff.0 * diff.0 + diff.1 * diff.1) as f32).sqrt();
                 pq.push(VisitNode {
                     block_id: neighbor_id,
                     entry: line,
@@ -241,26 +220,30 @@ impl Map {
 
     pub fn build_flow_field(&self, goal: Pos) -> anyhow::Result<FlowField> {
         let block_routes = self.block_route(goal)?;
-        let mut flow = vec![(0.0, 0.0); self.width * self.height];
+        let mut flow = vec![None; self.width * self.height];
         for x in 0..self.width {
             for y in 0..self.height {
                 let cell = self.get_cell(x, y);
                 let cell_pos = Pos { x, y };
                 if let Cell::Block(block_id) = cell {
                     if let Some((_, line, from_block)) = block_routes[block_id] {
-                        let nearest = line.nearest_point(cell_pos);
+                        let nearest = line.nearest_point(cell_pos); // nearest point on the entry line to the cell
                         if nearest == cell_pos {
+                            // cell is on the entry line
                             if let Some(from_block_id) = from_block {
-                                flow[y * self.width + x] =
-                                    self.get_norm(cell_pos, self.blocks[from_block_id].center());
+                                flow[y * self.width + x] = Some(
+                                    self.get_norm(cell_pos, self.blocks[from_block_id].center()), // direction towards the center of the next block
+                                );
                             } else {
-                                flow[y * self.width + x] = self.get_norm(cell_pos, goal);
+                                flow[y * self.width + x] = Some(self.get_norm(cell_pos, goal));
+                                // this is the goal block, direction towards the goal
                             }
                         } else {
-                            flow[y * self.width + x] = self.get_norm(cell_pos, nearest);
+                            flow[y * self.width + x] = Some(self.get_norm(cell_pos, nearest));
+                            // direction towards the nearest point on the entry line
                         }
                     } else {
-                        anyhow::bail!("Block {} is not reachable from the goal", block_id);
+                        flow[y * self.width + x] = None; // unreachable block
                     }
                 }
             }
@@ -274,9 +257,10 @@ impl Map {
         }
         let dx = (to.x as isize - from.x as isize).abs() as usize;
         let dy = (to.y as isize - from.y as isize).abs() as usize;
-        let (abs_x, abs_y) = self.norm_cache[&(dx.min(dy), dx.max(dy))];
-        let sign_x = if to.x >= from.x { 1.0 } else { -1.0 };
-        let sign_y = if to.y >= from.y { 1.0 } else { -1.0 };
-        (abs_x * sign_x, abs_y * sign_y)
+        let dist = ((dx * dx + dy * dy) as f32).sqrt();
+        (
+            (to.x as f32 - from.x as f32) / dist,
+            (to.y as f32 - from.y as f32) / dist,
+        )
     }
 }

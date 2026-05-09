@@ -51,6 +51,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "chunk-flow-field"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -218,14 +225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pathfinding"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "macroquad",
-]
-
-[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +254,14 @@ name = "ttf-parser"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c591d83f69777866b9126b24c6dd9a18351f177e49d625920d19f989fd31cf8"
+
+[[package]]
+name = "visualizer"
+version = "0.1.0"
+dependencies = [
+ "chunk-flow-field",
+ "macroquad",
+]
 
 [[package]]
 name = "winapi"

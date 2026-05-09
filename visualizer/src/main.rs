@@ -1,5 +1,5 @@
+use chunk_flow_field::{map::Map, types::Pos};
 use macroquad::prelude::*;
-use pathfinding::{map::Map, types::Pos};
 
 #[macroquad::main("Flow Field Debug")]
 async fn main() {
@@ -57,7 +57,7 @@ async fn main() {
 
                 draw_rectangle_lines(px, py, cell_size, cell_size, 1.0, DARKGRAY);
 
-                let dir = field.flow[y * cols + x];
+                let dir = field.flow[y * cols + x].unwrap_or((0.0, 0.0));
                 let len = cell_size / 2.0;
                 let center = Vec2::new(px + cell_size / 2.0, py + cell_size / 2.0);
                 draw_line(
