@@ -23,7 +23,7 @@ async fn main() {
     .map(|x| x == 1)
     .collect::<Vec<bool>>();
 
-    let map = Map::new(20, 20, wall.clone());
+    let map = Map::new(20, 20, &wall);
     println!("intersect test: {:?}", map.get_neighbors(1));
     // for i in 0..1000 {
     //     let new_map = Map::new(20, 20, wall.clone());

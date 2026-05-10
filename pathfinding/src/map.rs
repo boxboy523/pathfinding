@@ -14,7 +14,7 @@ pub struct Map {
 }
 
 impl Map {
-    pub fn new(width: usize, height: usize, wall: Vec<bool>) -> Self {
+    pub fn new(width: usize, height: usize, wall: &[bool]) -> Self {
         let mut block_map = vec![Cell::Empty; width * height];
         for i in 0..width * height {
             if wall[i] {
