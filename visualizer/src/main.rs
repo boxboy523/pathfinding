@@ -1,4 +1,7 @@
-use chunk_flow_field::{map::Map, types::Pos};
+use chunk_flow_field::{
+    map::{EDGE_BOTTOM, EDGE_RIGHT, Map, Obstacle, Side},
+    types::Pos,
+};
 use macroquad::prelude::*;
 
 #[macroquad::main("Flow Field Debug")]
@@ -23,7 +26,25 @@ async fn main() {
     .map(|x| x == 1)
     .collect::<Vec<bool>>();
 
-    let map = Map::new(20, 20, &wall);
+    let mut obstacle = Obstacle::new(20, 20);
+    for (index, &blocked) in wall.iter().enumerate() {
+        if blocked {
+            obstacle.set_cell_blocked(index % 20, index / 20);
+        }
+    }
+
+    // 높이 차이로 생긴 절벽을 가정한 edge다. 중간의 빈 구간은 slope 또는 통로로 사용한다.
+    for y in 1..9 {
+        if y != 3 && !wall[y * 20 + 8] && !wall[y * 20 + 9] {
+            obstacle.set_edge(8, y, Side::Right);
+        }
+    }
+    for x in 1..9 {
+        if x != 6 && !wall[9 * 20 + x] && !wall[10 * 20 + x] {
+            obstacle.set_edge(x, 9, Side::Bottom);
+        }
+    }
+    let map = Map::new(&obstacle);
     println!("intersect test: {:?}", map.get_neighbors(1));
     // for i in 0..1000 {
     //     let new_map = Map::new(20, 20, wall.clone());
@@ -56,6 +77,27 @@ async fn main() {
                 let py = y as f32 * cell_size;
 
                 draw_rectangle_lines(px, py, cell_size, cell_size, 1.0, DARKGRAY);
+
+                if !map.can_pass(x, y, EDGE_RIGHT) {
+                    draw_line(
+                        px + cell_size,
+                        py,
+                        px + cell_size,
+                        py + cell_size,
+                        4.0,
+                        BLUE,
+                    );
+                }
+                if !map.can_pass(x, y, EDGE_BOTTOM) {
+                    draw_line(
+                        px,
+                        py + cell_size,
+                        px + cell_size,
+                        py + cell_size,
+                        4.0,
+                        BLUE,
+                    );
+                }
 
                 let dir = field.flow[y * cols + x].unwrap_or((0.0, 0.0));
                 let len = cell_size / 2.0;
