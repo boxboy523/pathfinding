@@ -116,6 +116,20 @@ impl OrthogonalLine {
             }
         }
     }
+
+    /// 3 cell 이상인 선분은 양 끝 1 cell을 제외한 구간에서 가장 가까운 cell을 반환한다.
+    /// 1~2 cell인 선분은 기존 구간을 그대로 사용한다.
+    pub fn nearest_point_with_margin(&self, pos: Pos) -> Pos {
+        if self.len() < 3 {
+            return self.nearest_point(pos);
+        }
+        Self {
+            from: self.from + 1,
+            to: self.to - 1,
+            ..*self
+        }
+        .nearest_point(pos)
+    }
 }
 
 /// 직사각형 block의 경계 방향이다.
@@ -165,11 +179,18 @@ impl PartialOrd for VisitNode {
 
 impl Eq for VisitNode {}
 
+#[derive(Debug, Clone, Copy)]
+pub struct FlowFieldOptions {
+    pub wall_margin: f32,
+    pub wall_repulsion_strength: f32,
+}
+
 /// goal을 향한 cell별 단위 방향 vector를 보관한다.
 pub struct FlowField {
     pub goal: Pos,
     /// grid index별 =(dx, dy)= 단위 vector이며, wall 또는 도달 불가 cell은 =None=이다.
     pub flow: Vec<Option<(f32, f32)>>,
+    pub options: FlowFieldOptions,
 }
 
 /// goal에서 역방향으로 block route를 탐색한 결과를 저장한다.

@@ -1,10 +1,20 @@
 use chunk_flow_field::{
-    map::{EDGE_BOTTOM, EDGE_RIGHT, Map, Obstacle, Side},
-    types::Pos,
+    map::{EDGE_BOTTOM, EDGE_RIGHT, Map, Obstacle, Side}, types::{FlowFieldOptions, Pos},
 };
 use macroquad::prelude::*;
 
-#[macroquad::main("Flow Field Debug")]
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "Flow Field Debug".into(),
+        platform: miniquad::conf::Platform {
+            linux_backend: miniquad::conf::LinuxBackend::WaylandOnly,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[macroquad::main(window_conf)]
 async fn main() {
     let wall = vec![
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -52,7 +62,11 @@ async fn main() {
     //         map = new_map;
     //     }
     // }
-    let field = map.build_flow_field(Pos { x: 3, y: 3 }).unwrap();
+    let option = FlowFieldOptions {
+        wall_margin: 1.5,
+        wall_repulsion_strength: 0.4,
+    };
+    let field = map.build_flow_field(Pos { x: 3, y: 3 }, &option).unwrap();
     loop {
         clear_background(BLACK);
 

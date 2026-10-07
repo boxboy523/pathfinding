@@ -1,8 +1,7 @@
 use std::collections::{BinaryHeap, HashSet};
 
 use crate::{
-    block::Block,
-    types::{BlockRoute, Cell, FlowField, OrthogonalLine, Pos, VisitNode},
+    block::Block, types::{BlockRoute, Cell, FlowField, FlowFieldOptions, OrthogonalLine, Pos, VisitNode},
 };
 
 pub const EDGE_TOP: u8 = 0b0001;
@@ -49,27 +48,50 @@ impl Obstacle {
     pub fn set_edge(&mut self, x: usize, y: usize, side: Side) {
         let index = y * self.width + x;
         let edge = side.to_mask();
-        self.masks[index] |= edge;
+        if self.masks[index] & CELL_BLOCKED != 0 {
+            return; // cell is blocked, do not set edge
+        }
         match side {
             Side::Top if y > 0 => {
-                self.masks[(y - 1) * self.width + x] |= EDGE_BOTTOM;
+                if self.masks[(y - 1) * self.width + x] & CELL_BLOCKED == 0 {
+                    self.masks[(y - 1) * self.width + x] |= EDGE_BOTTOM;
+                } else { return; }
             }
             Side::Right if x + 1 < self.width => {
-                self.masks[y * self.width + (x + 1)] |= EDGE_LEFT;
+                if self.masks[y * self.width + (x + 1)] & CELL_BLOCKED == 0 {
+                    self.masks[y * self.width + (x + 1)] |= EDGE_LEFT;
+                } else { return; }
             }
             Side::Bottom if y + 1 < self.height => {
-                self.masks[(y + 1) * self.width + x] |= EDGE_TOP;
+                if self.masks[(y + 1) * self.width + x] & CELL_BLOCKED == 0 {
+                    self.masks[(y + 1) * self.width + x] |= EDGE_TOP;
+                } else { return; }
             }
             Side::Left if x > 0 => {
-                self.masks[y * self.width + (x - 1)] |= EDGE_RIGHT;
+                if self.masks[y * self.width + (x - 1)] & CELL_BLOCKED == 0 {
+                    self.masks[y * self.width + (x - 1)] |= EDGE_RIGHT;
+                } else { return; }
             }
             _ => {}
         }
+        self.masks[index] |= edge;
     }
 
     pub fn set_cell_blocked(&mut self, x: usize, y: usize) {
         let index = y * self.width + x;
-        self.masks[index] |= CELL_BLOCKED;
+        self.masks[index] = CELL_BLOCKED;
+        if x > 0 {
+            self.masks[y * self.width + (x - 1)] &= !EDGE_RIGHT;
+        }
+        if x + 1 < self.width {
+            self.masks[y * self.width + (x + 1)] &= !EDGE_LEFT;
+        }
+        if y > 0 {
+            self.masks[(y - 1) * self.width + x] &= !EDGE_BOTTOM;
+        }
+        if y + 1 < self.height {
+            self.masks[(y + 1) * self.width + x] &= !EDGE_TOP;
+        }
     }
 }
 
@@ -319,7 +341,7 @@ impl Map {
     }
 
     /// block route를 기준으로 각 walkable cell의 goal 방향 단위 vector를 생성한다.
-    pub fn build_flow_field(&self, goal: Pos) -> anyhow::Result<FlowField> {
+    pub fn build_flow_field(&self, goal: Pos, options: &FlowFieldOptions) -> anyhow::Result<FlowField> {
         let block_routes = self.get_block_route(goal)?;
         let mut flow = vec![None; self.width * self.height];
         for x in 0..self.width {
@@ -333,19 +355,19 @@ impl Map {
                         next_block,
                     }) = block_routes[block_id]
                     {
-                        let nearest = exit_portal.nearest_point(cell_pos); // nearest point on the entry line to the cell
+                        let nearest = exit_portal.nearest_point_with_margin(cell_pos);
                         if nearest == cell_pos {
                             // cell is on the entry line
                             if let Some(from_block_id) = next_block {
                                 flow[y * self.width + x] = Some(
-                                    self.get_norm(cell_pos, self.blocks[from_block_id].center()), // direction towards the center of the next block
+                                    self.get_norm_with_repulsion(cell_pos, self.blocks[from_block_id].center(), options), // direction towards the center of the next block
                                 );
                             } else {
-                                flow[y * self.width + x] = Some(self.get_norm(cell_pos, goal));
+                                flow[y * self.width + x] = Some(self.get_norm_with_repulsion(cell_pos, goal, options));
                                 // this is the goal block, direction towards the goal
                             }
                         } else {
-                            flow[y * self.width + x] = Some(self.get_norm(cell_pos, nearest));
+                            flow[y * self.width + x] = Some(self.get_norm_with_repulsion(cell_pos, nearest, options));
                             // direction towards the nearest point on the entry line
                         }
                     } else {
@@ -354,7 +376,7 @@ impl Map {
                 }
             }
         }
-        Ok(FlowField { goal, flow })
+        Ok(FlowField { goal, flow, options: options.clone() })
     }
 
     /// =from=에서 =to=로 향하는 2D 단위 vector를 반환한다.
@@ -369,6 +391,84 @@ impl Map {
             (to.x as f32 - from.x as f32) / dist,
             (to.y as f32 - from.y as f32) / dist,
         )
+    }
+
+    fn get_repulsion(&self, pos: Pos, options: &FlowFieldOptions) -> (f32, f32) {
+        if options.wall_margin <= 0.0 || options.wall_repulsion_strength <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let mut repulsion = (0.0, 0.0);
+        let px = pos.x as f32 + 0.5;
+        let py = pos.y as f32 + 0.5;
+
+        let radius = options.wall_margin.ceil() as isize + 1;
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let nx = pos.x as isize + dx;
+                let ny = pos.y as isize + dy;
+
+                if nx < 0 || ny < 0 || nx >= self.width as isize || ny >= self.height as isize {
+                    continue;
+                }
+
+                let nx = nx as usize;
+                let ny = ny as usize;
+
+                match self.get_cell(nx, ny) {
+                    Cell::Wall => {
+                        let qx = px.clamp(nx as f32, nx as f32 + 1.0);
+                        let qy = py.clamp(ny as f32, ny as f32 + 1.0);
+                        let diff_x = px - qx;
+                        let diff_y = py - qy;
+
+                        let distance = (diff_x * diff_x + diff_y * diff_y).sqrt();
+                        let weight =  (1.0 - distance / options.wall_margin).clamp(0.0, 1.0) * options.wall_repulsion_strength;
+                        repulsion.0 += (diff_x / distance) * weight;
+                        repulsion.1 += (diff_y / distance) * weight;
+                    },
+                    _ => {
+                        let edge_mask = self.obstacle_masks[ny * self.width + nx];
+                        if edge_mask & EDGE_TOP != 0 {
+                            let qx = px.clamp(nx as f32, nx as f32 + 1.0);
+                            let qy = ny as f32;
+                            let diff_x = px - qx;
+                            let diff_y = py - qy;
+                            let distance = (diff_x * diff_x + diff_y * diff_y).sqrt();
+                            let weight = (1.0 - distance / options.wall_margin).clamp(0.0, 1.0) * options.wall_repulsion_strength;
+                            repulsion.0 += (diff_x / distance) * weight;
+                            repulsion.1 += (diff_y / distance) * weight;
+                        }
+                        if edge_mask & EDGE_LEFT != 0 {
+                            let qx = nx as f32;
+                            let qy = py.clamp(ny as f32, ny as f32 + 1.0);
+                            let diff_x = px - qx;
+                            let diff_y = py - qy;
+                            let distance = (diff_x * diff_x + diff_y * diff_y).sqrt();
+                            let weight = (1.0 - distance / options.wall_margin).clamp(0.0, 1.0) * options.wall_repulsion_strength;
+                            repulsion.0 += (diff_x / distance) * weight;
+                            repulsion.1 += (diff_y / distance) * weight;
+                        }
+                    }
+                }
+            }
+        }
+        repulsion
+    }
+
+    pub fn get_norm_with_repulsion(&self, from: Pos, to: Pos, options: &FlowFieldOptions) -> (f32, f32) {
+        if from == to {
+            return (0.0, 0.0);
+        }
+        let (flow_x, flow_y) = self.get_norm(from, to);
+        let (repulsion_x, repulsion_y) = self.get_repulsion(from, options);
+        let combined_x = flow_x + repulsion_x;
+        let combined_y = flow_y + repulsion_y;
+        let length = (combined_x * combined_x + combined_y * combined_y).sqrt();
+        if length < 1e-6 {
+            (flow_x, flow_y)
+        } else {
+            (combined_x / length, combined_y / length)
+        }
     }
 
     pub fn can_pass(&self, x: usize, y: usize, edge: u8) -> bool {
