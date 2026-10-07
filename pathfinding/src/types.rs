@@ -183,6 +183,17 @@ impl Eq for VisitNode {}
 pub struct FlowFieldOptions {
     pub wall_margin: f32,
     pub wall_repulsion_strength: f32,
+    pub max_repulsion_ratio: f32,
+}
+
+impl Default for FlowFieldOptions {
+    fn default() -> Self {
+        Self {
+            wall_margin: 1.0,
+            wall_repulsion_strength: 0.5,
+            max_repulsion_ratio: 0.8,
+        }
+    }
 }
 
 /// goal을 향한 cell별 단위 방향 vector를 보관한다.

@@ -328,7 +328,7 @@ impl Map {
                     boundary_mid.x.abs_diff(entry_mid.x),
                     boundary_mid.y.abs_diff(entry_mid.y),
                 );
-                let dist = ((diff.0 * diff.0 + diff.1 * diff.1) as f32).sqrt();
+                let dist = (diff.0 as f32).hypot(diff.1 as f32);
                 pq.push(VisitNode {
                     block_id: neighbor_id,
                     entry: line,
@@ -386,7 +386,7 @@ impl Map {
         }
         let dx = to.x.abs_diff(from.x);
         let dy = to.y.abs_diff(from.y);
-        let dist = ((dx * dx + dy * dy) as f32).sqrt();
+        let dist = (dx as f32).hypot(dy as f32);
         (
             (to.x as f32 - from.x as f32) / dist,
             (to.y as f32 - from.y as f32) / dist,
@@ -421,7 +421,7 @@ impl Map {
                         let diff_x = px - qx;
                         let diff_y = py - qy;
 
-                        let distance = (diff_x * diff_x + diff_y * diff_y).sqrt();
+                        let distance = diff_x.hypot(diff_y);
                         let weight =  (1.0 - distance / options.wall_margin).clamp(0.0, 1.0) * options.wall_repulsion_strength;
                         repulsion.0 += (diff_x / distance) * weight;
                         repulsion.1 += (diff_y / distance) * weight;
@@ -433,7 +433,7 @@ impl Map {
                             let qy = ny as f32;
                             let diff_x = px - qx;
                             let diff_y = py - qy;
-                            let distance = (diff_x * diff_x + diff_y * diff_y).sqrt();
+                            let distance = diff_x.hypot(diff_y);
                             let weight = (1.0 - distance / options.wall_margin).clamp(0.0, 1.0) * options.wall_repulsion_strength;
                             repulsion.0 += (diff_x / distance) * weight;
                             repulsion.1 += (diff_y / distance) * weight;
@@ -443,7 +443,7 @@ impl Map {
                             let qy = py.clamp(ny as f32, ny as f32 + 1.0);
                             let diff_x = px - qx;
                             let diff_y = py - qy;
-                            let distance = (diff_x * diff_x + diff_y * diff_y).sqrt();
+                            let distance = diff_x.hypot(diff_y);
                             let weight = (1.0 - distance / options.wall_margin).clamp(0.0, 1.0) * options.wall_repulsion_strength;
                             repulsion.0 += (diff_x / distance) * weight;
                             repulsion.1 += (diff_y / distance) * weight;
@@ -460,10 +460,16 @@ impl Map {
             return (0.0, 0.0);
         }
         let (flow_x, flow_y) = self.get_norm(from, to);
-        let (repulsion_x, repulsion_y) = self.get_repulsion(from, options);
+        let (mut repulsion_x, mut repulsion_y) = self.get_repulsion(from, options);
+        let repulsion_magnitude = repulsion_x.hypot(repulsion_y);
+        if repulsion_magnitude > options.max_repulsion_ratio {
+            let scale = options.max_repulsion_ratio / repulsion_magnitude;
+            repulsion_x = repulsion_x * scale;
+            repulsion_y = repulsion_y * scale;
+        }
         let combined_x = flow_x + repulsion_x;
         let combined_y = flow_y + repulsion_y;
-        let length = (combined_x * combined_x + combined_y * combined_y).sqrt();
+        let length = combined_x.hypot(combined_y);
         if length < 1e-6 {
             (flow_x, flow_y)
         } else {

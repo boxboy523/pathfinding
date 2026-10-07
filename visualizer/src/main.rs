@@ -62,10 +62,7 @@ async fn main() {
     //         map = new_map;
     //     }
     // }
-    let option = FlowFieldOptions {
-        wall_margin: 1.5,
-        wall_repulsion_strength: 0.4,
-    };
+    let option = FlowFieldOptions::default();
     let field = map.build_flow_field(Pos { x: 3, y: 3 }, &option).unwrap();
     loop {
         clear_background(BLACK);
