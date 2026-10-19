@@ -3,21 +3,24 @@ use crate::{
     types::{Cell, OrthogonalLine, Pos, Side},
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Portal {
+    pub neighbor: usize,
+    pub line: OrthogonalLine,
+}
+
 #[derive(Debug)]
-/// wall이 없는 walkable grid cell들을 포함하는 축 정렬 직사각형이다.
 pub struct Block {
-    /// block 왼쪽 상단 cell의 x 좌표이다.
     pub x: usize,
-    /// block 왼쪽 상단 cell의 y 좌표이다.
     pub y: usize,
-    /// block이 포함하는 column 개수이다.
     pub width: usize,
-    /// block이 포함하는 row 개수이다.
     pub height: usize,
+    pub id: usize,
+    pub chunk_id: Option<usize>,
+    pub portals: Vec<Portal>,
 }
 
 impl Block {
-    /// wall, map edge, 이미 할당된 block을 침범하지 않는 범위에서 한 단계 확장한다.
     pub fn expand(&mut self, map: &Map) -> Option<()> {
         let mut expand_y_up = true;
         let mut expand_y_down = true;
@@ -159,5 +162,26 @@ impl Block {
                 to: self.y + self.height,
             },
         }
+    }
+
+    pub fn get_vertices(&self) -> Vec<Pos> {
+        vec![
+            Pos {
+                x: self.x,
+                y: self.y,
+            },
+            Pos {
+                x: self.x + self.width - 1,
+                y: self.y,
+            },
+            Pos {
+                x: self.x,
+                y: self.y + self.height - 1,
+            },
+            Pos {
+                x: self.x + self.width - 1,
+                y: self.y + self.height - 1,
+            },
+        ]
     }
 }

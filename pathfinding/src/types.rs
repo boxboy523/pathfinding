@@ -149,15 +149,17 @@ pub enum Cell {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-/// goal에서 역방향으로 block route를 탐색할 때 priority queue에 저장하는 node이다.
+/// goal에서 역방향으로 chunk route를 탐색할 때 priority queue에 저장하는 node이다.
 pub struct VisitNode {
-    /// 탐색 대상 block index.
-    pub block_id: usize,
-    /// 해당 block이 goal 방향으로 향할 경계 구간이다.
+    /// 탐색 대상 chunk index.
+    pub chunk_id: usize,
+    /// 해당 chunk 쪽 경계 셀 구간이다.
     pub entry: OrthogonalLine,
+    /// portal에서 goal 방향 이웃 셀로 넘어가는 좌표 차이다.
+    pub exit_step: (isize, isize),
     /// goal에서 현재 node까지의 누적 추정 비용이다.
     pub cost: f32,
-    /// 역방향 탐색의 부모이며, 실제 이동에서는 goal 쪽 다음 block이다.
+    /// 역방향 탐색의 부모이며, 실제 이동에서는 goal 쪽 다음 chunk이다.
     pub from: Option<usize>,
 }
 
@@ -204,10 +206,11 @@ pub struct FlowField {
     pub options: FlowFieldOptions,
 }
 
-/// goal에서 역방향으로 block route를 탐색한 결과를 저장한다.
+/// goal에서 역방향으로 chunk route를 탐색한 결과를 저장한다.
 #[derive(Debug, Clone, Copy)]
-pub struct BlockRoute {
+pub struct ChunkRoute {
     pub cost: f32,
     pub exit_portal: OrthogonalLine,
-    pub next_block: Option<usize>,
+    pub next_chunk: Option<usize>,
+    pub exit_step: (isize, isize),
 }
