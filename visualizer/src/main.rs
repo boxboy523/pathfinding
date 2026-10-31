@@ -1,6 +1,6 @@
 use chunk_flow_field::{
     map::{EDGE_BOTTOM, EDGE_RIGHT, Map, Obstacle, Side},
-    types::{Cell, FlowFieldOptions, Pos},
+    types::{Cell, FlowField, FlowFieldOptions, Pos},
 };
 use macroquad::prelude::*;
 
@@ -166,7 +166,7 @@ async fn main() {
     let mut map_kind = 3;
     let options = FlowFieldOptions::default();
     let mut goal = Pos { x: 2, y: 2 };
-    let mut field = map.build_flow_field(goal, &options).unwrap();
+    let mut field = FlowField::new(goal, &options, &map).unwrap();
     let mut show_blocks = true;
     let mut show_flow = true;
     loop {
@@ -187,7 +187,7 @@ async fn main() {
                 _ => staircase_map(),
             };
             goal = Pos { x: 2, y: 2 };
-            field = map.build_flow_field(goal, &options).unwrap();
+            field = FlowField::new(goal, &options, &map).unwrap();
         }
         if is_key_pressed(KeyCode::B) {
             show_blocks = !show_blocks;
@@ -195,7 +195,9 @@ async fn main() {
         if is_key_pressed(KeyCode::F) {
             show_flow = !show_flow;
         }
-        if is_mouse_button_pressed(MouseButton::Left) {
+        let add_wall = is_mouse_button_pressed(MouseButton::Left);
+        let change_goal = is_mouse_button_pressed(MouseButton::Right);
+        if add_wall || change_goal {
             let (mx, my) = mouse_position();
             if mx >= 0.0 && my >= TOP {
                 let pos = Pos {
@@ -203,17 +205,27 @@ async fn main() {
                     y: ((my - TOP) / SIZE) as usize,
                 };
                 if matches!(map.get_cell(pos.x, pos.y), Cell::Block(_)) {
-                    goal = pos;
-                    field = map.build_flow_field(goal, &options).unwrap();
+                    if add_wall {
+                        // 목표는 유지하여 flow 재계산이 실패하지 않게 한다.
+                        if pos != goal {
+                            let mut obstacle = Obstacle::new(map.width, map.height);
+                            obstacle.set_cell_blocked(pos.x, pos.y);
+                            map.add_obstacle(&obstacle).unwrap();
+                        }
+                    } else if change_goal {
+                        goal = pos;
+                        field = FlowField::new(goal, &options, &map).unwrap();
+                    }
                 }
             }
         }
         clear_background(Color::new(0.06, 0.07, 0.09, 1.0));
         draw_text(
             &format!(
-                "{} blocks / {} chunks | B: blocks | F: flow | Click: goal",
+                "{} blocks / {} chunks | gen {} | B: blocks | F: flow",
                 map.blocks.len(),
-                map.chunks.len()
+                map.chunks.len(),
+                map.get_generation()
             ),
             10.0,
             23.0,
@@ -222,15 +234,16 @@ async fn main() {
         );
         draw_text(
             match map_kind {
-                1 => "1: Simple / 2: Complex / 3: Stairs | Staircase / L / edge room",
-                2 => "1: Simple / 2: Complex / 3: Stairs | Orange: blocked edge",
-                _ => "1: Simple / 2: Complex / 3: Stairs | Each stair region should be ONE chunk",
+                1 => "1/2/3: maps | Left: wall | Right: goal | Simple",
+                2 => "1/2/3: maps | Left: wall | Right: goal | Orange: blocked edge",
+                _ => "1/2/3: maps | Left: wall | Right: goal | Stairs",
             },
             10.0,
             47.0,
             16.0,
             LIGHTGRAY,
         );
+        let flow = field.get_valid_field(&map).unwrap();
         for y in 0..ROWS {
             for x in 0..COLS {
                 let px = x as f32 * SIZE;
@@ -278,7 +291,7 @@ async fn main() {
                     }
                 }
                 if show_flow {
-                    if let Some((dx, dy)) = field.flow[y * COLS + x] {
+                    if let Some((dx, dy)) = flow[y * COLS + x] {
                         let cx = px + SIZE / 2.0;
                         let cy = py + SIZE / 2.0;
                         draw_line(cx, cy, cx + dx * SIZE * 0.4, cy + dy * SIZE * 0.4, 2.0, RED);
@@ -322,6 +335,29 @@ async fn main() {
 mod tests {
     use super::*;
     #[test]
+    fn adding_wall_invalidates_and_refreshes_flow() {
+        let mut map = staircase_map();
+        let goal = Pos { x: 2, y: 2 };
+        let wall = Pos { x: 3, y: 2 };
+        let mut field = FlowField::new(goal, &FlowFieldOptions::default(), &map).unwrap();
+        let index = wall.y * map.width + wall.x;
+        assert!(field.get_valid_field(&map).unwrap()[index].is_some());
+        let generation = map.get_generation();
+
+        let mut obstacle = Obstacle::new(map.width, map.height);
+        obstacle.set_cell_blocked(wall.x, wall.y);
+        map.add_obstacle(&obstacle).unwrap();
+
+        assert_eq!(map.get_generation(), generation + 1);
+        assert_eq!(map.get_cell(wall.x, wall.y), Cell::Wall);
+        assert!(!field.is_valid(&map));
+        let flow = field.get_valid_field(&map).unwrap();
+        assert_eq!(flow[index], None);
+        assert_eq!(flow[goal.y * map.width + goal.x], Some((0.0, 0.0)));
+        assert!(field.is_valid(&map));
+    }
+
+    #[test]
     fn staircase_regions_merge_and_share_direct_goal_flow() {
         let map = staircase_map();
         let options = FlowFieldOptions {
@@ -349,7 +385,7 @@ mod tests {
             let goal = tiles[0];
             let field = map.build_flow_field(goal, &options).unwrap();
             for pos in tiles {
-                let actual = field.flow[pos.y * COLS + pos.x].unwrap();
+                let actual = field[pos.y * COLS + pos.x].unwrap();
                 let dx = goal.x as f32 - pos.x as f32;
                 let dy = goal.y as f32 - pos.y as f32;
                 let len = dx.hypot(dy);
@@ -373,7 +409,7 @@ mod tests {
             for x in 0..COLS {
                 if matches!(map.get_cell(x, y), Cell::Block(_)) {
                     assert!(
-                        field.flow[y * COLS + x].is_some(),
+                        field[y * COLS + x].is_some(),
                         "unreachable tile ({x}, {y})"
                     );
                 }

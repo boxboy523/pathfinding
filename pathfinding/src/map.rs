@@ -2,7 +2,7 @@ use std::collections::{BinaryHeap, BTreeSet};
 
 use crate::{
     convex_hull::{convex_hull, tiles_inside_hull},
-    block::{Block, Portal}, types::{ChunkRoute, Cell, FlowField, FlowFieldOptions, OrthogonalLine, Pos, VisitNode},
+    block::{Block, Portal}, types::{ChunkRoute, Cell, FlowFieldOptions, OrthogonalLine, Pos, VisitNode},
 };
 
 pub const EDGE_TOP: u8 = 0b0001;
@@ -97,6 +97,33 @@ impl Obstacle {
             self.masks[(y + 1) * self.width + x] &= !EDGE_TOP;
         }
     }
+
+    pub fn merge(&mut self, other: &Obstacle) -> anyhow::Result<()> {
+        if self.width != other.width || self.height != other.height {
+            anyhow::bail!("Obstacle sizes do not match for merging");
+        }
+        for (i, &mask) in other.masks.iter().enumerate() {
+            let x = i % self.width;
+            let y = i / self.width;
+            if mask & CELL_BLOCKED != 0 {
+                self.set_cell_blocked(x, y);
+            } else {
+                if mask & EDGE_TOP != 0 {
+                    self.set_edge(x, y, Side::Top);
+                }
+                if mask & EDGE_RIGHT != 0 {
+                    self.set_edge(x, y, Side::Right);
+                }
+                if mask & EDGE_BOTTOM != 0 {
+                    self.set_edge(x, y, Side::Bottom);
+                }
+                if mask & EDGE_LEFT != 0 {
+                    self.set_edge(x, y, Side::Left);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -111,9 +138,10 @@ pub struct Map {
     pub width: usize,
     pub height: usize,
     block_map: Vec<Cell>,
-    obstacle_masks: Vec<u8>,
+    obstacle: Obstacle,
     pub blocks: Vec<Block>,
     pub chunks: Vec<Chunk>,
+    generation: usize,
 }
 
 impl Map {
@@ -131,10 +159,15 @@ impl Map {
         let mut map = Map {
             width,
             height,
-            obstacle_masks: masks,
+            obstacle: Obstacle {
+                width,
+                height,
+                masks,
+            },
             block_map,
             blocks: vec![],
             chunks: vec![],
+            generation: 0,
         };
         map.bulid_map();
         map
@@ -146,6 +179,10 @@ impl Map {
             return Cell::Wall;
         }
         self.block_map[y * self.width + x]
+    }
+
+    pub fn get_generation(&self) -> usize {
+        self.generation
     }
 
     /// 주어진 block과 변을 공유하는 block과 그 접촉 구간(portal)을 반환한다.
@@ -414,6 +451,25 @@ impl Map {
         }
     }
 
+    pub fn add_obstacle(&mut self, obstacle: &Obstacle) -> anyhow::Result<()> {
+        if self.width != obstacle.width || self.height != obstacle.height {
+            anyhow::bail!("Obstacle sizes do not match for merging");
+        }
+        self.obstacle.merge(obstacle)?;
+        self.blocks.clear();
+        self.chunks.clear();
+        self.block_map = self.obstacle.masks.iter().map(|&mask| {
+            if mask & CELL_BLOCKED != 0 {
+                Cell::Wall
+            } else {
+                Cell::Empty
+            }
+        }).collect();
+        self.bulid_map();
+        self.generation += 1;
+        Ok(())
+    }
+
     /// Chunk 외부 portal만 사용하여 목표에서 역방향 탐색한다.
     fn get_chunk_route(&self, goal: Pos) -> anyhow::Result<Vec<Option<ChunkRoute>>> {
         let goal_chunk = match self.get_cell(goal.x, goal.y) {
@@ -482,14 +538,14 @@ impl Map {
     }
 
     /// Chunk별 출구를 공유하고 내부 Block 사이의 portal은 무시한다.
-    pub fn build_flow_field(&self, goal: Pos, options: &FlowFieldOptions) -> anyhow::Result<FlowField> {
-        if options.wall_margin < 0.0 {
+    pub fn build_flow_field(&self, goal: Pos, options: &FlowFieldOptions) -> anyhow::Result<Vec<Option<(f32, f32)>>> {
+        if !options.wall_margin.is_finite() || options.wall_margin < 0.0 {
             anyhow::bail!("wall_margin must be non-negative");
         }
-        if options.wall_repulsion_strength < 0.0 {
+        if !options.wall_repulsion_strength.is_finite() || options.wall_repulsion_strength < 0.0 {
             anyhow::bail!("wall_repulsion_strength must be non-negative");
         }
-        if options.max_repulsion_ratio < 0.0 {
+        if !options.max_repulsion_ratio.is_finite() || options.max_repulsion_ratio < 0.0 {
             anyhow::bail!("max_repulsion_ratio must be non-negative");
         }
         let routes = self.get_chunk_route(goal)?;
@@ -520,7 +576,7 @@ impl Map {
                 flow[y * self.width + x] = Some(self.get_norm_with_repulsion(pos, target, options));
             }
         }
-        Ok(FlowField { goal, flow, options: *options })
+        Ok(flow)
     }
 
     /// =from=에서 =to=로 향하는 2D 단위 vector를 반환한다.
@@ -571,7 +627,7 @@ impl Map {
                         repulsion.1 += (diff_y / distance) * weight;
                     },
                     _ => {
-                        let edge_mask = self.obstacle_masks[ny * self.width + nx];
+                        let edge_mask = self.obstacle.masks[ny * self.width + nx];
                         if edge_mask & EDGE_TOP != 0 {
                             let qx = px.clamp(nx as f32, nx as f32 + 1.0);
                             let qy = ny as f32;
@@ -623,7 +679,7 @@ impl Map {
 
     pub fn can_pass(&self, x: usize, y: usize, edge: u8) -> bool {
         let index = y * self.width + x;
-        (self.obstacle_masks[index] & edge) == 0
+        (self.obstacle.masks[index] & edge) == 0
     }
 }
 
@@ -648,7 +704,7 @@ mod tests {
         for y in 0..5 {
             for x in 0..5 {
                 if matches!(map.get_cell(x, y), Cell::Block(_)) {
-                    let actual = field.flow[y * 5 + x].unwrap();
+                    let actual = field[y * 5 + x].unwrap();
                     let expected = map.get_norm(Pos { x, y }, goal);
                     assert!((actual.0 - expected.0).abs() < 1e-6);
                     assert!((actual.1 - expected.1).abs() < 1e-6);
@@ -690,8 +746,8 @@ mod tests {
                 let field = map.build_flow_field(goal, &options).unwrap();
                 let p = route.exit_portal.mid_point();
                 assert_eq!(map.get_cell(p.x, p.y), Cell::Block(source_id));
-                assert_eq!(field.flow[p.y * 6 + p.x], Some((expected.0 as f32, expected.1 as f32)));
-                assert_eq!(field.flow[goal.y * 6 + goal.x], Some((0.0, 0.0)));
+                assert_eq!(field[p.y * 6 + p.x], Some((expected.0 as f32, expected.1 as f32)));
+                assert_eq!(field[goal.y * 6 + goal.x], Some((0.0, 0.0)));
             }
         }
     }
@@ -753,8 +809,8 @@ mod tests {
     fn hull_closure_checks_edges_between_automatically_added_blocks() {
         let mut map = closure_test_map();
         // B와 자동으로 추가될 C 사이의 edge. A와의 접촉면만 검사하면 놓친다.
-        map.obstacle_masks[4] |= EDGE_RIGHT;
-        map.obstacle_masks[5] |= EDGE_LEFT;
+        map.obstacle.masks[4] |= EDGE_RIGHT;
+        map.obstacle.masks[5] |= EDGE_LEFT;
         assert!(map.collect_merge_blocks(&map.chunks[0], 1, &BTreeSet::from([1, 2])).is_none());
     }
 
@@ -883,11 +939,8 @@ mod tests {
     }
 
     fn map_with_two_row_blocks(obstacle: Obstacle) -> Map {
-        let Obstacle {
-            width,
-            height,
-            masks,
-        } = obstacle;
+        let width = obstacle.width;
+        let height = obstacle.height;
         let mut block_map = vec![Cell::Block(0); width * height];
         for cell in &mut block_map[width..] {
             *cell = Cell::Block(1);
@@ -897,7 +950,7 @@ mod tests {
             width,
             height,
             block_map,
-            obstacle_masks: masks,
+            obstacle,
             blocks: vec![
                 Block {
                     x: 0,
@@ -919,6 +972,7 @@ mod tests {
                 },
             ],
             chunks: vec![],
+            generation: 0,
         };
         for block_id in 0..map.blocks.len() {
             map.blocks[block_id].portals = map.get_neighbors(block_id);

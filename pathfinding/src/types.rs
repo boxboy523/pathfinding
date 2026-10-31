@@ -1,5 +1,7 @@
 use std::ops::{Add, Sub};
 
+use crate::map::Map;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// grid 내 cell 좌표이다.
 pub struct Pos {
@@ -200,11 +202,43 @@ impl Default for FlowFieldOptions {
 
 /// goal을 향한 cell별 단위 방향 vector를 보관한다.
 pub struct FlowField {
-    pub goal: Pos,
+    goal: Pos,
     /// grid index별 =(dx, dy)= 단위 vector이며, wall 또는 도달 불가 cell은 =None=이다.
-    pub flow: Vec<Option<(f32, f32)>>,
-    pub options: FlowFieldOptions,
+    flow: Vec<Option<(f32, f32)>>,
+    options: FlowFieldOptions,
+    generation: usize,
 }
+
+impl FlowField {
+    pub fn new(goal: Pos, options: &FlowFieldOptions, map: &Map) -> anyhow::Result<Self> {
+        let flow = map.build_flow_field(goal, options)?;
+        Ok(Self {
+            goal,
+            flow,
+            options: *options,
+            generation: map.get_generation(),
+        })
+    }
+
+    pub fn is_valid(&self, map: &Map) -> bool {
+        self.generation == map.get_generation()
+    }
+
+    pub fn recompute(&mut self, map: &Map) -> anyhow::Result<()> {
+        self.flow = map.build_flow_field(self.goal, &self.options)?;
+        self.generation = map.get_generation();
+        Ok(())
+    }
+
+    pub fn get_valid_field(&mut self, map: &Map) -> anyhow::Result<&[Option<(f32, f32)>]> {
+        if !self.is_valid(map) {
+            self.recompute(map)?;
+        }
+        Ok(&self.flow)
+    }
+}
+
+
 
 /// goal에서 역방향으로 chunk route를 탐색한 결과를 저장한다.
 #[derive(Debug, Clone, Copy)]
