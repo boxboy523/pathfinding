@@ -201,6 +201,7 @@ impl Default for FlowFieldOptions {
 }
 
 /// goal을 향한 cell별 단위 방향 vector를 보관한다.
+#[derive(Debug, Clone)]
 pub struct FlowField {
     goal: Pos,
     /// grid index별 =(dx, dy)= 단위 vector이며, wall 또는 도달 불가 cell은 =None=이다.
