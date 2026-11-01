@@ -221,6 +221,15 @@ impl FlowField {
         })
     }
 
+    pub fn empty(goal: Pos, options: &FlowFieldOptions) -> Self {
+        Self {
+            goal,
+            flow: Vec::new(),
+            options: *options,
+            generation: 0,
+        }
+    }
+
     pub fn is_valid(&self, map: &Map) -> bool {
         self.generation == map.get_generation()
     }
