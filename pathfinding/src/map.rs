@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, BTreeSet};
+use std::collections::{BTreeMap, BinaryHeap, BTreeSet};
 
 use crate::{
     convex_hull::{convex_hull, tiles_inside_hull},
@@ -132,6 +132,10 @@ pub struct Chunk {
     pub portals: Vec<Portal>,
 }
 
+/// Map 내에서 생성된 건물의 식별자. 삭제 후에도 재사용하지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BuildingId(usize);
+
 #[derive(Debug)]
 /// wall grid, walkable block 분할, block adjacency를 보관하는 map이다.
 pub struct Map {
@@ -139,6 +143,9 @@ pub struct Map {
     pub height: usize,
     block_map: Vec<Cell>,
     obstacle: Obstacle,
+    base_obstacle: Obstacle,
+    buildings: BTreeMap<BuildingId, Obstacle>,
+    next_building_id: usize,
     pub blocks: Vec<Block>,
     pub chunks: Vec<Chunk>,
     generation: usize,
@@ -164,6 +171,9 @@ impl Map {
                 height,
                 masks,
             },
+            base_obstacle: obstacle.clone(),
+            buildings: BTreeMap::new(),
+            next_building_id: 0,
             block_map,
             blocks: vec![],
             chunks: vec![],
@@ -451,11 +461,57 @@ impl Map {
         }
     }
 
-    pub fn add_obstacle(&mut self, obstacle: &Obstacle) -> anyhow::Result<()> {
+    /// 벽이나 경계가 있는 셀이 기본 지형 또는 기존 건물과 겹치면 거절한다.
+    /// obstacle은 Map과 같은 크기여야 한다.
+    pub fn add_building(&mut self, obstacle: Obstacle) -> anyhow::Result<BuildingId> {
         if self.width != obstacle.width || self.height != obstacle.height {
-            anyhow::bail!("Obstacle sizes do not match for merging");
+            anyhow::bail!("Building obstacle size does not match map");
         }
-        self.obstacle.merge(obstacle)?;
+        if obstacle.masks.iter().all(|&mask| mask == 0) {
+            anyhow::bail!("Building obstacle must not be empty");
+        }
+        if self.obstacle.masks.iter().zip(&obstacle.masks)
+            .any(|(&existing, &added)| existing != 0 && added != 0)
+        {
+            anyhow::bail!("Building overlaps existing terrain or building");
+        }
+        let next_id = self.next_building_id.checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Building ID exhausted"))?;
+        let generation = self.generation.checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Map generation exhausted"))?;
+        let mut combined = self.obstacle.clone();
+        combined.merge(&obstacle)?;
+
+        let id = BuildingId(self.next_building_id);
+        self.buildings.insert(id, obstacle);
+        self.next_building_id = next_id;
+        self.rebuild_obstacle(combined);
+        self.generation = generation;
+        Ok(id)
+    }
+
+    /// 건물을 제거하고 기본 지형과 나머지 건물로 맵을 재구성한다.
+    /// 없는 ID라면 Map과 generation을 변경하지 않는다.
+    pub fn remove_building(&mut self, id: BuildingId) -> anyhow::Result<()> {
+        if !self.buildings.contains_key(&id) {
+            anyhow::bail!("Unknown building ID");
+        }
+        let generation = self.generation.checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Map generation exhausted"))?;
+        let mut combined = self.base_obstacle.clone();
+        for (&building_id, obstacle) in &self.buildings {
+            if building_id != id {
+                combined.merge(obstacle)?;
+            }
+        }
+        self.buildings.remove(&id);
+        self.rebuild_obstacle(combined);
+        self.generation = generation;
+        Ok(())
+    }
+
+    fn rebuild_obstacle(&mut self, obstacle: Obstacle) {
+        self.obstacle = obstacle;
         self.blocks.clear();
         self.chunks.clear();
         self.block_map = self.obstacle.masks.iter().map(|&mask| {
@@ -466,8 +522,6 @@ impl Map {
             }
         }).collect();
         self.bulid_map();
-        self.generation += 1;
-        Ok(())
     }
 
     /// Chunk 외부 portal만 사용하여 목표에서 역방향 탐색한다.
@@ -950,6 +1004,9 @@ mod tests {
             width,
             height,
             block_map,
+            base_obstacle: obstacle.clone(),
+            buildings: BTreeMap::new(),
+            next_building_id: 0,
             obstacle,
             blocks: vec![
                 Block {

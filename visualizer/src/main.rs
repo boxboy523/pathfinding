@@ -167,6 +167,7 @@ async fn main() {
     let options = FlowFieldOptions::default();
     let mut goal = Pos { x: 2, y: 2 };
     let mut field = FlowField::new(goal, &options, &map).unwrap();
+    let mut buildings = std::collections::HashMap::new();
     let mut show_blocks = true;
     let mut show_flow = true;
     loop {
@@ -188,6 +189,7 @@ async fn main() {
             };
             goal = Pos { x: 2, y: 2 };
             field = FlowField::new(goal, &options, &map).unwrap();
+            buildings.clear();
         }
         if is_key_pressed(KeyCode::B) {
             show_blocks = !show_blocks;
@@ -197,20 +199,30 @@ async fn main() {
         }
         let add_wall = is_mouse_button_pressed(MouseButton::Left);
         let change_goal = is_mouse_button_pressed(MouseButton::Right);
-        if add_wall || change_goal {
+        let remove_wall = is_mouse_button_pressed(MouseButton::Middle);
+        if add_wall || change_goal || remove_wall {
             let (mx, my) = mouse_position();
             if mx >= 0.0 && my >= TOP {
                 let pos = Pos {
                     x: (mx / SIZE) as usize,
                     y: ((my - TOP) / SIZE) as usize,
                 };
-                if matches!(map.get_cell(pos.x, pos.y), Cell::Block(_)) {
+                if remove_wall {
+                    // 기본 지형은 유지하고 이 화면에서 추가한 건물만 삭제한다.
+                    if let Some(&id) = buildings.get(&pos) {
+                        map.remove_building(id).unwrap();
+                        buildings.remove(&pos);
+                    }
+                } else if matches!(map.get_cell(pos.x, pos.y), Cell::Block(_)) {
                     if add_wall {
                         // 목표는 유지하여 flow 재계산이 실패하지 않게 한다.
                         if pos != goal {
                             let mut obstacle = Obstacle::new(map.width, map.height);
                             obstacle.set_cell_blocked(pos.x, pos.y);
-                            map.add_obstacle(&obstacle).unwrap();
+                            match map.add_building(obstacle) {
+                                Ok(id) => { buildings.insert(pos, id); }
+                                Err(error) => eprintln!("Cannot place building: {error}"),
+                            }
                         }
                     } else if change_goal {
                         goal = pos;
@@ -234,9 +246,9 @@ async fn main() {
         );
         draw_text(
             match map_kind {
-                1 => "1/2/3: maps | Left: wall | Right: goal | Simple",
-                2 => "1/2/3: maps | Left: wall | Right: goal | Orange: blocked edge",
-                _ => "1/2/3: maps | Left: wall | Right: goal | Stairs",
+                1 => "1/2/3: maps | Left: wall | Middle: remove | Right: goal | Simple",
+                2 => "1/2/3: maps | Left: wall | Middle: remove | Right: goal | Complex",
+                _ => "1/2/3: maps | Left: wall | Middle: remove | Right: goal | Stairs",
             },
             10.0,
             47.0,
