@@ -237,6 +237,10 @@ impl FlowField {
         }
         Ok(&self.flow)
     }
+
+    pub fn get_goal(&self) -> Pos {
+        self.goal
+    }
 }
 
 
