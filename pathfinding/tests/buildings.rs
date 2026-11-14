@@ -36,6 +36,8 @@ fn rejected_placement_is_atomic_and_ids_are_not_reused() {
     let mut map = Map::new(&wall(4, 3, 0, 0));
     let id = map.add_building(wall(4, 3, 1, 1)).unwrap();
     let generation = map.get_generation();
+    let blocks = map.blocks.keys().collect::<Vec<_>>();
+    let portals = map.portals.keys().collect::<Vec<_>>();
     let mut overlapping = wall(4, 3, 1, 1);
     overlapping.set_cell_blocked(2, 1);
     assert!(map.add_building(overlapping).is_err());
@@ -43,13 +45,19 @@ fn rejected_placement_is_atomic_and_ids_are_not_reused() {
     assert!(map.add_building(Obstacle::new(4, 3)).is_err());
     assert!(map.add_building(wall(3, 3, 1, 1)).is_err());
     assert_eq!(map.get_generation(), generation);
+    assert_eq!(map.blocks.keys().collect::<Vec<_>>(), blocks);
+    assert_eq!(map.portals.keys().collect::<Vec<_>>(), portals);
     assert!(matches!(map.get_cell(2, 1), Cell::Block(_)));
     map.remove_building(id).unwrap();
     let next = map.add_building(wall(4, 3, 1, 1)).unwrap();
     assert_ne!(id, next);
     let generation = map.get_generation();
+    let blocks = map.blocks.keys().collect::<Vec<_>>();
+    let portals = map.portals.keys().collect::<Vec<_>>();
     assert!(map.remove_building(id).is_err());
     assert_eq!(map.get_generation(), generation);
+    assert_eq!(map.blocks.keys().collect::<Vec<_>>(), blocks);
+    assert_eq!(map.portals.keys().collect::<Vec<_>>(), portals);
     assert_eq!(map.get_cell(1, 1), Cell::Wall);
 }
 

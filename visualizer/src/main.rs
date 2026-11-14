@@ -1,17 +1,21 @@
+mod path_debug;
+
 use chunk_flow_field::{
     map::{EDGE_BOTTOM, EDGE_RIGHT, Map, Obstacle, Side},
     types::{Cell, FlowField, FlowFieldOptions, Pos},
+    BlockId,
 };
 use macroquad::prelude::*;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 const COLS: usize = 24;
 const ROWS: usize = 22;
 const SIZE: f32 = 32.0;
-const TOP: f32 = 64.0;
+const TOP: f32 = 136.0;
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Chunk Merge Debug".into(),
+        window_title: "Block Portal Flow Path Quality".into(),
         window_width: (COLS as f32 * SIZE) as i32,
         window_height: (ROWS as f32 * SIZE + TOP) as i32,
         platform: miniquad::conf::Platform {
@@ -114,41 +118,68 @@ fn complex_map() -> Map {
     Map::new(&obstacle)
 }
 
-fn draw_blocked_edges(map: &Map) {
-    // 모든 타일/Block/라벨을 그린 뒤 별도 패스로 그려 덮이지 않게 한다.
-    for y in 0..ROWS {
-        for x in 0..COLS {
+// 방 ID는 row-major 0..15. 나선형 연결로 전 방 도달을 보장하고 지름길 두 개만 추가한다.
+fn rts_rooms_connected(a: usize, b: usize) -> bool {
+    const SPIRAL: [usize; 16] = [0, 1, 2, 3, 7, 11, 15, 14, 13, 12, 8, 4, 5, 6, 10, 9];
+    SPIRAL.windows(2).any(|pair| (pair[0] == a && pair[1] == b) || (pair[0] == b && pair[1] == a))
+        || [(1, 5), (10, 14)].iter().any(|&(x, y)| (a == x && b == y) || (a == y && b == x))
+}
+
+fn rts_map() -> Map {
+    let mut obstacle = Obstacle::new(256, 256);
+    for y in 0..256 {
+        for x in 0..256 {
+            let door_y = x >= 64 && (30..38).contains(&(y % 64))
+                && rts_rooms_connected((y / 64) * 4 + x / 64 - 1, (y / 64) * 4 + x / 64);
+            let door_x = y >= 64 && (30..38).contains(&(x % 64))
+                && rts_rooms_connected((y / 64 - 1) * 4 + x / 64, (y / 64) * 4 + x / 64);
+            let wall = x < 2 || y < 2 || x >= 254 || y >= 254
+                || (x >= 64 && x % 64 < 2 && !door_y)
+                || (y >= 64 && y % 64 < 2 && !door_x)
+                || ((21..27).contains(&(x % 64)) && (21..27).contains(&(y % 64)));
+            if wall { obstacle.set_cell_blocked(x, y); }
+        }
+    }
+    Map::new(&obstacle)
+}
+
+fn draw_blocked_edges(map: &Map, tile_size: f32) {
+    let scale = (tile_size / SIZE).min(1.0);
+    for y in 0..map.height {
+        for x in 0..map.width {
             if !matches!(map.get_cell(x, y), Cell::Block(_)) {
                 continue;
             }
-            let px = x as f32 * SIZE;
-            let py = TOP + y as f32 * SIZE;
+            let px = x as f32 * tile_size;
+            let py = TOP + y as f32 * tile_size;
             let edges = [
-                (EDGE_RIGHT, px + SIZE, py, px + SIZE, py + SIZE),
-                (EDGE_BOTTOM, px, py + SIZE, px + SIZE, py + SIZE),
+                (EDGE_RIGHT, px + tile_size, py, px + tile_size, py + tile_size),
+                (EDGE_BOTTOM, px, py + tile_size, px + tile_size, py + tile_size),
             ];
             for (mask, x1, y1, x2, y2) in edges {
                 if map.can_pass(x, y, mask) {
                     continue;
                 }
-                draw_line(x1, y1, x2, y2, 10.0, BLACK);
-                draw_line(x1, y1, x2, y2, 6.0, ORANGE);
-                draw_line(x1, y1, x2, y2, 1.5, WHITE);
-                draw_circle(x1, y1, 3.0, ORANGE);
-                draw_circle(x2, y2, 3.0, ORANGE);
+                draw_line(x1, y1, x2, y2, (10.0 * scale).max(1.0), BLACK);
+                draw_line(x1, y1, x2, y2, (6.0 * scale).max(0.7), ORANGE);
+                if tile_size >= 12.0 {
+                    draw_line(x1, y1, x2, y2, 1.5, WHITE);
+                    draw_circle(x1, y1, 3.0, ORANGE);
+                    draw_circle(x2, y2, 3.0, ORANGE);
+                }
             }
         }
     }
 }
 
-fn chunk_at(map: &Map, x: usize, y: usize) -> Option<usize> {
+fn block_at(map: &Map, x: usize, y: usize) -> Option<BlockId> {
     match map.get_cell(x, y) {
-        Cell::Block(id) => map.blocks[id].chunk_id,
+        Cell::Block(id) => Some(id),
         _ => None,
     }
 }
 
-fn chunk_color(id: usize) -> Color {
+fn block_color(id: BlockId) -> Color {
     const COLORS: [Color; 6] = [
         Color::new(0.15, 0.40, 0.48, 1.0),
         Color::new(0.46, 0.28, 0.18, 1.0),
@@ -157,19 +188,34 @@ fn chunk_color(id: usize) -> Color {
         Color::new(0.48, 0.22, 0.32, 1.0),
         Color::new(0.40, 0.39, 0.16, 1.0),
     ];
-    COLORS[id % COLORS.len()]
+    let mut hash = DefaultHasher::new();
+    id.hash(&mut hash);
+    COLORS[hash.finish() as usize % COLORS.len()]
+}
+
+fn draw_trace(trace: &path_debug::Trace, tile_size: f32, color: Color, width: f32) {
+    let screen = |p: Vec2| vec2(p.x * tile_size, TOP + p.y * tile_size);
+    for segment in trace.points.windows(2) {
+        let a = screen(segment[0]);
+        let b = screen(segment[1]);
+        draw_line(a.x, a.y, b.x, b.y, width, color);
+    }
 }
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut map = staircase_map();
-    let mut map_kind = 3;
-    let options = FlowFieldOptions::default();
-    let mut goal = Pos { x: 2, y: 2 };
+    let mut map = rts_map();
+    let mut map_kind = 4;
+    let mut options = FlowFieldOptions::default();
+    let mut start = Pos { x: 248, y: 248 };
+    let mut route_key = None;
+    let mut routes: Option<(path_debug::Trace, path_debug::Trace, path_debug::Trace)> = None;
+    let mut goal = Pos { x: 8, y: 8 };
     let mut field = FlowField::new(goal, &options, &map).unwrap();
     let mut buildings = std::collections::HashMap::new();
     let mut show_blocks = true;
     let mut show_flow = true;
+    let mut show_astar = false;
     loop {
         let selected = if is_key_pressed(KeyCode::Key1) {
             Some(1)
@@ -177,6 +223,8 @@ async fn main() {
             Some(2)
         } else if is_key_pressed(KeyCode::Key3) {
             Some(3)
+        } else if is_key_pressed(KeyCode::Key4) {
+            Some(4)
         } else {
             None
         };
@@ -185,9 +233,11 @@ async fn main() {
             map = match map_kind {
                 1 => demo_map(),
                 2 => complex_map(),
+                4 => rts_map(),
                 _ => staircase_map(),
             };
-            goal = Pos { x: 2, y: 2 };
+            goal = if map_kind == 4 { Pos { x: 8, y: 8 } } else { Pos { x: 2, y: 2 } };
+            start = if map_kind == 4 { Pos { x: 248, y: 248 } } else { Pos { x: 7, y: 2 } };
             field = FlowField::new(goal, &options, &map).unwrap();
             buildings.clear();
         }
@@ -197,15 +247,26 @@ async fn main() {
         if is_key_pressed(KeyCode::F) {
             show_flow = !show_flow;
         }
+        if is_key_pressed(KeyCode::A) {
+            show_astar = !show_astar;
+        }
+        if is_key_pressed(KeyCode::R) {
+            options.wall_repulsion_strength = if options.wall_repulsion_strength == 0.0 { 0.5 } else { 0.0 };
+            field = FlowField::new(goal, &options, &map).unwrap();
+            route_key = None;
+        }
+        let tile_size = (screen_width() / map.width as f32)
+            .min((screen_height() - TOP) / map.height as f32);
         let add_wall = is_mouse_button_pressed(MouseButton::Left);
+        let change_start = add_wall && (is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift));
         let change_goal = is_mouse_button_pressed(MouseButton::Right);
         let remove_wall = is_mouse_button_pressed(MouseButton::Middle);
         if add_wall || change_goal || remove_wall {
             let (mx, my) = mouse_position();
             if mx >= 0.0 && my >= TOP {
                 let pos = Pos {
-                    x: (mx / SIZE) as usize,
-                    y: ((my - TOP) / SIZE) as usize,
+                    x: (mx / tile_size) as usize,
+                    y: ((my - TOP) / tile_size) as usize,
                 };
                 if remove_wall {
                     // 기본 지형은 유지하고 이 화면에서 추가한 건물만 삭제한다.
@@ -214,9 +275,11 @@ async fn main() {
                         buildings.remove(&pos);
                     }
                 } else if matches!(map.get_cell(pos.x, pos.y), Cell::Block(_)) {
-                    if add_wall {
-                        // 목표는 유지하여 flow 재계산이 실패하지 않게 한다.
-                        if pos != goal {
+                    if change_start {
+                        start = pos;
+                    } else if add_wall {
+                        // 출발지와 목표는 유지한다.
+                        if pos != goal && pos != start {
                             let mut obstacle = Obstacle::new(map.width, map.height);
                             obstacle.set_cell_blocked(pos.x, pos.y);
                             match map.add_building(obstacle) {
@@ -231,70 +294,80 @@ async fn main() {
                 }
             }
         }
-        clear_background(Color::new(0.06, 0.07, 0.09, 1.0));
-        draw_text(
-            &format!(
-                "{} blocks / {} chunks | gen {} | B: blocks | F: flow",
-                map.blocks.len(),
-                map.chunks.len(),
-                map.get_generation()
-            ),
-            10.0,
-            23.0,
-            19.0,
-            WHITE,
-        );
-        draw_text(
-            match map_kind {
-                1 => "1/2/3: maps | Left: wall | Middle: remove | Right: goal | Simple",
-                2 => "1/2/3: maps | Left: wall | Middle: remove | Right: goal | Complex",
-                _ => "1/2/3: maps | Left: wall | Middle: remove | Right: goal | Stairs",
-            },
-            10.0,
-            47.0,
-            16.0,
-            LIGHTGRAY,
-        );
         let flow = field.get_valid_field(&map).unwrap();
-        for y in 0..ROWS {
-            for x in 0..COLS {
-                let px = x as f32 * SIZE;
-                let py = TOP + y as f32 * SIZE;
-                let Some(id) = chunk_at(&map, x, y) else {
-                    draw_rectangle(px, py, SIZE, SIZE, Color::new(0.19, 0.20, 0.22, 1.0));
+        let key = (start, goal, map.get_generation(), map_kind);
+        if route_key != Some(key) {
+            let grid_flow = path_debug::grid_flow(&map, goal, &options);
+            routes = Some((
+                path_debug::trace_flow(&map, flow, start, goal),
+                path_debug::trace_flow(&map, &grid_flow, start, goal),
+                path_debug::astar(&map, start, goal),
+            ));
+            route_key = Some(key);
+        }
+        clear_background(Color::new(0.06, 0.07, 0.09, 1.0));
+        draw_text(&format!("Map {} | {} blocks / {} portals | gen {} | B: blocks | F: vectors",
+            map_kind, map.blocks.len(), map.portals.len(), map.get_generation()), 10.0, 20.0, 17.0, WHITE);
+        draw_text("1/2/3/4: maps (4: RTS 256) | Shift+Left: start | Right: goal",
+            10.0, 41.0, 17.0, WHITE);
+        draw_text(&format!("Left: wall | Middle: remove | R: repulsion ({}) | A: A* ({})",
+            if options.wall_repulsion_strength == 0.0 { "off" } else { "on" },
+            if show_astar { "on" } else { "off" }),
+            10.0, 62.0, 16.0, LIGHTGRAY);
+        if let Some((trace, grid, reference)) = &routes {
+            let ratio = if trace.status == path_debug::Status::Reached
+                && grid.status == path_debug::Status::Reached && grid.length() > 0.0 {
+                format!(" | Block/Grid {:.3}", trace.length() / grid.length())
+            } else { String::new() };
+            draw_text(&format!("Cyan Block: {} {:.2} | Yellow Grid: {} {:.2}{}",
+                trace.status.label(), trace.length(), grid.status.label(), grid.length(), ratio),
+                10.0, 84.0, 16.0, WHITE);
+            draw_text(&format!("Magenta A*: {} {:.2} cells | Both flows use the same repulsion and tracer",
+                reference.status.label(), reference.length()), 10.0, 105.0, 15.0, LIGHTGRAY);
+        }
+        draw_text("Point agent, 0.08-cell steps; lengths in cells. A* is grid-optimal, not continuous-optimal.",
+            10.0, 126.0, 14.0, LIGHTGRAY);
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let px = x as f32 * tile_size;
+                let py = TOP + y as f32 * tile_size;
+                let Some(id) = block_at(&map, x, y) else {
+                    draw_rectangle(px, py, tile_size, tile_size, Color::new(0.19, 0.20, 0.22, 1.0));
                     continue;
                 };
-                draw_rectangle(px, py, SIZE, SIZE, chunk_color(id));
-                draw_rectangle_lines(px, py, SIZE, SIZE, 0.5, Color::new(1.0, 1.0, 1.0, 0.12));
-                // Chunk의 실제 타일 경계만 표시한다.
+                draw_rectangle(px, py, tile_size, tile_size, block_color(id));
+                if tile_size >= 10.0 {
+                    draw_rectangle_lines(px, py, tile_size, tile_size, 0.5, Color::new(1.0, 1.0, 1.0, 0.12));
+                }
+                // 직사각형 Block의 실제 타일 경계를 표시한다.
                 let borders = [
                     (
-                        y == 0 || chunk_at(&map, x, y - 1) != Some(id),
+                        y == 0 || block_at(&map, x, y - 1) != Some(id),
                         px,
                         py,
-                        px + SIZE,
+                        px + tile_size,
                         py,
                     ),
                     (
-                        chunk_at(&map, x, y + 1) != Some(id),
+                        block_at(&map, x, y + 1) != Some(id),
                         px,
-                        py + SIZE,
-                        px + SIZE,
-                        py + SIZE,
+                        py + tile_size,
+                        px + tile_size,
+                        py + tile_size,
                     ),
                     (
-                        x == 0 || chunk_at(&map, x - 1, y) != Some(id),
+                        x == 0 || block_at(&map, x - 1, y) != Some(id),
                         px,
                         py,
                         px,
-                        py + SIZE,
+                        py + tile_size,
                     ),
                     (
-                        chunk_at(&map, x + 1, y) != Some(id),
-                        px + SIZE,
+                        block_at(&map, x + 1, y) != Some(id),
+                        px + tile_size,
                         py,
-                        px + SIZE,
-                        py + SIZE,
+                        px + tile_size,
+                        py + tile_size,
                     ),
                 ];
                 for (visible, x1, y1, x2, y2) in borders {
@@ -302,43 +375,59 @@ async fn main() {
                         draw_line(x1, y1, x2, y2, 2.0, WHITE);
                     }
                 }
-                if show_flow {
-                    if let Some((dx, dy)) = flow[y * COLS + x] {
-                        let cx = px + SIZE / 2.0;
-                        let cy = py + SIZE / 2.0;
-                        draw_line(cx, cy, cx + dx * SIZE * 0.4, cy + dy * SIZE * 0.4, 2.0, RED);
+                if show_flow && tile_size >= 10.0 {
+                    if let Some((dx, dy)) = flow[y * map.width + x] {
+                        let cx = px + tile_size / 2.0;
+                        let cy = py + tile_size / 2.0;
+                        draw_line(cx, cy, cx + dx * tile_size * 0.4, cy + dy * tile_size * 0.4, 2.0, RED);
                     }
                 }
             }
         }
-        for block in &map.blocks {
-            let px = block.x as f32 * SIZE;
-            let py = TOP + block.y as f32 * SIZE;
-            if show_blocks {
+        for block in map.blocks.values() {
+            let px = block.x as f32 * tile_size;
+            let py = TOP + block.y as f32 * tile_size;
+            if show_blocks && tile_size >= 10.0 {
                 draw_rectangle_lines(
                     px + 2.0,
                     py + 2.0,
-                    block.width as f32 * SIZE - 4.0,
-                    block.height as f32 * SIZE - 4.0,
+                    block.width as f32 * tile_size - 4.0,
+                    block.height as f32 * tile_size - 4.0,
                     1.0,
                     YELLOW,
                 );
             }
+            if tile_size >= 12.0 {
             draw_text(
-                &format!("C{}", block.chunk_id.unwrap()),
+                &format!("{:?}", block.id),
                 px + 5.0,
                 py + 18.0,
                 16.0,
                 WHITE,
             );
+            }
         }
-        draw_blocked_edges(&map);
-        draw_circle(
-            (goal.x as f32 + 0.5) * SIZE,
-            TOP + (goal.y as f32 + 0.5) * SIZE,
-            6.0,
-            LIME,
-        );
+        draw_blocked_edges(&map, tile_size);
+        if let Some((trace, grid, reference)) = &routes {
+            if show_astar { draw_trace(reference, tile_size, MAGENTA, 5.0); }
+            draw_trace(grid, tile_size, YELLOW, 3.5);
+            draw_trace(trace, tile_size, SKYBLUE, 2.0);
+            for (route, color) in [(trace, SKYBLUE), (grid, YELLOW)] {
+                if route.status != path_debug::Status::Reached {
+                    let end = *route.points.last().unwrap();
+                    draw_circle_lines(end.x * tile_size, TOP + end.y * tile_size, 6.0, 2.0, RED);
+                }
+                if !route.points.is_empty() {
+                    let i = ((get_time() * 35.0) as usize) % route.points.len();
+                    let p = route.points[i];
+                    draw_circle(p.x * tile_size, TOP + p.y * tile_size, 3.0, color);
+                }
+            }
+        }
+        let s = path_debug::center(start);
+        let g = path_debug::center(goal);
+        draw_circle(s.x * tile_size, TOP + s.y * tile_size, 5.0, SKYBLUE);
+        draw_circle(g.x * tile_size, TOP + g.y * tile_size, 5.0, LIME);
         next_frame().await;
     }
 }
@@ -346,6 +435,75 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rts_rooms_remain_connected_but_some_neighbors_require_detours() {
+        let map = rts_map();
+        // 가로 인접 방 6-7과 세로 인접 방 2-6 사이에는 직접 연결이 없다.
+        assert_eq!(map.get_cell(192, 98), Cell::Wall);
+        assert_eq!(map.get_cell(162, 64), Cell::Wall);
+        assert!(matches!(map.get_cell(64, 34), Cell::Block(_)));
+
+        let start = Pos { x: 190, y: 98 };
+        let goal = Pos { x: 194, y: 98 };
+        let route = path_debug::astar(&map, start, goal);
+        assert_eq!(route.status, path_debug::Status::Reached);
+        assert!(route.length() > 64.0, "blocked neighbors must require a detour");
+
+        // 실제 셀을 4방향 BFS로 탐색해 모든 통행 가능 셀의 연결을 검증한다.
+        let mut visited = vec![false; map.width * map.height];
+        let first = Pos { x: 8, y: 8 };
+        let mut queue = std::collections::VecDeque::from([first]);
+        visited[first.y * map.width + first.x] = true;
+        while let Some(pos) = queue.pop_front() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (Some(x), Some(y)) = (pos.x.checked_add_signed(dx), pos.y.checked_add_signed(dy)) else { continue; };
+                if !matches!(map.get_cell(x, y), Cell::Block(_)) { continue; }
+                let index = y * map.width + x;
+                if !visited[index] {
+                    visited[index] = true;
+                    queue.push_back(Pos { x, y });
+                }
+            }
+        }
+        for y in 0..map.height {
+            for x in 0..map.width {
+                if matches!(map.get_cell(x, y), Cell::Block(_)) {
+                    assert!(visited[y * map.width + x], "unreachable cell ({x}, {y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rts_preview_paths_are_computed_without_a_window() {
+        let map = rts_map();
+        let start = Pos { x: 248, y: 248 };
+        let goal = Pos { x: 8, y: 8 };
+        let reference = path_debug::astar(&map, start, goal);
+        assert_eq!(reference.status, path_debug::Status::Reached);
+        for strength in [0.0, 0.5] {
+            let options = FlowFieldOptions { wall_repulsion_strength: strength, ..Default::default() };
+            let flow = map.build_flow_field(goal, &options).unwrap();
+            let trace = path_debug::trace_flow(&map, &flow, start, goal);
+            assert!(trace.length().is_finite());
+            assert_eq!(trace.points.first(), Some(&path_debug::center(start)));
+            assert!(trace.points.iter().all(|p| matches!(
+                map.get_cell(p.x.floor() as usize, p.y.floor() as usize), Cell::Block(_))));
+            // Reaching is deliberately not required: this UI must expose failures too.
+            eprintln!("RTS repulsion={strength}: flow={} length={:.2}, A* length={:.2}",
+                trace.status.label(), trace.length(), reference.length());
+            let grid_flow = path_debug::grid_flow(&map, goal, &options);
+            assert_eq!(grid_flow.len(), flow.len());
+            for (chunk, grid) in flow.iter().zip(&grid_flow) {
+                assert_eq!(chunk.is_some(), grid.is_some());
+            }
+            let grid_trace = path_debug::trace_flow(&map, &grid_flow, start, goal);
+            assert!(grid_trace.length().is_finite());
+            eprintln!("RTS grid repulsion={strength}: {} length={:.2}",
+                grid_trace.status.label(), grid_trace.length());
+        }
+    }
+
     #[test]
     fn adding_wall_invalidates_and_refreshes_flow() {
         let mut map = staircase_map();
@@ -358,7 +516,7 @@ mod tests {
 
         let mut obstacle = Obstacle::new(map.width, map.height);
         obstacle.set_cell_blocked(wall.x, wall.y);
-        map.add_obstacle(&obstacle).unwrap();
+        map.add_building(obstacle).unwrap();
 
         assert_eq!(map.get_generation(), generation + 1);
         assert_eq!(map.get_cell(wall.x, wall.y), Cell::Wall);
@@ -370,21 +528,19 @@ mod tests {
     }
 
     #[test]
-    fn staircase_regions_merge_and_share_direct_goal_flow() {
+    fn staircase_regions_keep_rectangular_blocks_and_goal_block_steers_directly() {
         let map = staircase_map();
         let options = FlowFieldOptions {
             wall_repulsion_strength: 0.0,
             ..Default::default()
         };
-        assert_eq!(map.chunks.len(), 3);
+        assert!(map.blocks.len() > 3);
         for region in 0..3 {
-            let mut chunks = std::collections::BTreeSet::new();
             let mut blocks = std::collections::BTreeSet::new();
             let mut tiles = Vec::new();
             for y in 0..ROWS {
                 for x in 0..COLS {
                     if staircase_region(x, y) == Some(region) {
-                        chunks.insert(chunk_at(&map, x, y).unwrap());
                         if let Cell::Block(id) = map.get_cell(x, y) {
                             blocks.insert(id);
                         }
@@ -392,12 +548,12 @@ mod tests {
                     }
                 }
             }
-            assert_eq!(chunks.len(), 1, "region {region} split across chunks");
             assert!(blocks.len() > 1);
             let goal = tiles[0];
             let field = map.build_flow_field(goal, &options).unwrap();
             for pos in tiles {
                 let actual = field[pos.y * COLS + pos.x].unwrap();
+                if block_at(&map, pos.x, pos.y) != block_at(&map, goal.x, goal.y) { continue; }
                 let dx = goal.x as f32 - pos.x as f32;
                 let dy = goal.y as f32 - pos.y as f32;
                 let len = dx.hypot(dy);
@@ -435,25 +591,21 @@ mod tests {
         assert!(map.can_pass(19, 16, EDGE_RIGHT));
     }
     #[test]
-    fn demo_covers_merge_rejection_and_edge_cases() {
+    fn demo_covers_rectangular_partition_and_edge_cases() {
         let map = demo_map();
-        let mut staircase_chunks = std::collections::BTreeSet::new();
         let mut staircase_blocks = std::collections::BTreeSet::new();
         for y in 1..=9 {
             for x in 1..=9 {
                 if x + y <= 10 {
-                    staircase_chunks.insert(chunk_at(&map, x, y).unwrap());
                     if let Cell::Block(id) = map.get_cell(x, y) {
                         staircase_blocks.insert(id);
                     }
                 }
             }
         }
-        // 중간 모양의 빈틈을 다른 Block으로 채워 계단 전체를 병합한다.
-        assert_eq!(staircase_chunks.len(), 1);
-        assert!(staircase_chunks.len() < staircase_blocks.len());
-        assert_ne!(chunk_at(&map, 14, 1), chunk_at(&map, 22, 9));
-        assert_ne!(chunk_at(&map, 11, 12), chunk_at(&map, 12, 12));
+        assert!(staircase_blocks.len() > 1);
+        assert_ne!(block_at(&map, 14, 1), block_at(&map, 22, 9));
+        assert_ne!(block_at(&map, 11, 12), block_at(&map, 12, 12));
         assert!(!map.can_pass(11, 12, EDGE_RIGHT));
         assert!(map.can_pass(11, 16, EDGE_RIGHT));
     }

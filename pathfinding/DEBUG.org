@@ -1,0 +1,4 @@
+길찾기의 정확성 개선을 위해 Chunk를 노드로 탐색 -> Portal를 노드로 탐색을 구상. AI에 코딩 요구.
+AI가 기존 Portal을 불필요하게 Exit이라는 새로운 구조체에 복사해 구현하는것을 발견. 길찾기 도중에는 Map이 보존되고
+길찾기 데이터는 Flow Field 생성 과정에만 일시적으로 사용되기에 Portal의 Reference를 직접 드는게 더 낫다고 판단,
+(&Portal, NodeId) 구조로 수정을 제안.

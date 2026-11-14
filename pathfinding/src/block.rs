@@ -1,12 +1,22 @@
 use crate::{
     map::{EDGE_BOTTOM, EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, Map},
+    portal::PortalId,
+    keys::BlockId,
     types::{Cell, OrthogonalLine, Pos, Side},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Portal {
-    pub neighbor: usize,
-    pub line: OrthogonalLine,
+/// Maximum long/short side ratio for rectangular Blocks.
+pub(crate) const MAX_ASPECT_RATIO: usize = 2;
+
+fn limit_axis_growth(length: usize, other: usize, negative: &mut bool, positive: &mut bool) {
+    let limit = other.saturating_mul(MAX_ASPECT_RATIO);
+    if length >= limit {
+        *negative = false;
+        *positive = false;
+    } else if *negative && *positive && length.saturating_add(2) > limit {
+        // Keep one legal step rather than rejecting both opposite directions.
+        *positive = false;
+    }
 }
 
 #[derive(Debug)]
@@ -15,9 +25,9 @@ pub struct Block {
     pub y: usize,
     pub width: usize,
     pub height: usize,
-    pub id: usize,
-    pub chunk_id: Option<usize>,
-    pub portals: Vec<Portal>,
+    pub id: BlockId,
+    /// IDs of incident openings owned by Map::portals.
+    pub portals: Vec<PortalId>,
 }
 
 impl Block {
@@ -80,6 +90,9 @@ impl Block {
             let end_y = self.y + self.height.saturating_sub(1);
             expand_x_right = (self.y..end_y).all(|y| map.can_pass(new_x, y, EDGE_BOTTOM));
         }
+
+        limit_axis_growth(self.height, self.width, &mut expand_y_up, &mut expand_y_down);
+        limit_axis_growth(self.width, self.height, &mut expand_x_left, &mut expand_x_right);
 
         if self.width >= self.height {
             if expand_y_up || expand_y_down {

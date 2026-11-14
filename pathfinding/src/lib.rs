@@ -1,4 +1,7 @@
 mod block;
 pub mod map;
 pub mod types;
-mod convex_hull;
+mod portal_route;
+pub mod portal;
+pub mod keys;
+pub use keys::{BlockId, PortalId};
